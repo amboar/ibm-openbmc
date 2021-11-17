@@ -1,0 +1,198 @@
+From b5bb32f18ea087746bc42ff253f99a4ea4c3ec78 Mon Sep 17 00:00:00 2001
+From: Andrew Jeffery <andrew@aj.id.au>
+Date: Mon, 15 Nov 2021 14:56:16 +1030
+Subject: [PATCH] wdt: aspeed: WARN() on pre-timeout IRQ
+
+This is a last ditch effort at information gathering to find where we
+might be stuck in the kernel on UP systems if the watchdog is about to
+bite.
+
+Signed-off-by: Andrew Jeffery <andrew@aj.id.au>
+Signed-off-by: Eddie James <eajames@linux.ibm.com>
+---
+ arch/arm/boot/dts/aspeed-g5.dtsi |  3 ++
+ arch/arm/boot/dts/aspeed-g6.dtsi |  4 ++
+ drivers/watchdog/aspeed_wdt.c    | 67 ++++++++++++++++++++++++++++----
+ 3 files changed, 67 insertions(+), 7 deletions(-)
+
+diff --git a/arch/arm/boot/dts/aspeed-g5.dtsi b/arch/arm/boot/dts/aspeed-g5.dtsi
+index b5758ac6f3eb..733841da728b 100644
+--- a/arch/arm/boot/dts/aspeed-g5.dtsi
++++ b/arch/arm/boot/dts/aspeed-g5.dtsi
+@@ -393,12 +393,14 @@
+ 				compatible = "aspeed,ast2500-wdt";
+ 				reg = <0x1e785000 0x20>;
+ 				clocks = <&syscon ASPEED_CLK_APB>;
++				interrupts = <27>;
+ 			};
+ 
+ 			wdt2: watchdog@1e785020 {
+ 				compatible = "aspeed,ast2500-wdt";
+ 				reg = <0x1e785020 0x20>;
+ 				clocks = <&syscon ASPEED_CLK_APB>;
++				interrupts = <27>;
+ 			};
+ 
+ 			wdt3: watchdog@1e785040 {
+@@ -406,6 +408,7 @@
+ 				reg = <0x1e785040 0x20>;
+ 				clocks = <&syscon ASPEED_CLK_APB>;
+ 				status = "disabled";
++				interrupts = <27>;
+ 			};
+ 
+ 			pwm_tacho: pwm-tacho-controller@1e786000 {
+diff --git a/arch/arm/boot/dts/aspeed-g6.dtsi b/arch/arm/boot/dts/aspeed-g6.dtsi
+index d0916af4f293..33ff63423550 100644
+--- a/arch/arm/boot/dts/aspeed-g6.dtsi
++++ b/arch/arm/boot/dts/aspeed-g6.dtsi
+@@ -430,23 +430,27 @@
+ 			wdt1: watchdog@1e785000 {
+ 				compatible = "aspeed,ast2600-wdt";
+ 				reg = <0x1e785000 0x40>;
++				interrupts = <GIC_SPI 24 IRQ_TYPE_LEVEL_HIGH>;
+ 			};
+ 
+ 			wdt2: watchdog@1e785040 {
+ 				compatible = "aspeed,ast2600-wdt";
+ 				reg = <0x1e785040 0x40>;
++				interrupts = <GIC_SPI 24 IRQ_TYPE_LEVEL_HIGH>;
+ 				status = "disabled";
+ 			};
+ 
+ 			wdt3: watchdog@1e785080 {
+ 				compatible = "aspeed,ast2600-wdt";
+ 				reg = <0x1e785080 0x40>;
++				interrupts = <GIC_SPI 24 IRQ_TYPE_LEVEL_HIGH>;
+ 				status = "disabled";
+ 			};
+ 
+ 			wdt4: watchdog@1e7850C0 {
+ 				compatible = "aspeed,ast2600-wdt";
+ 				reg = <0x1e7850C0 0x40>;
++				interrupts = <GIC_SPI 24 IRQ_TYPE_LEVEL_HIGH>;
+ 				status = "disabled";
+ 			};
+ 
+diff --git a/drivers/watchdog/aspeed_wdt.c b/drivers/watchdog/aspeed_wdt.c
+index 7e00960651fa..41598390fe48 100644
+--- a/drivers/watchdog/aspeed_wdt.c
++++ b/drivers/watchdog/aspeed_wdt.c
+@@ -5,36 +5,56 @@
+  * Joel Stanley <joel@jms.id.au>
+  */
+ 
++#include <linux/bits.h>
+ #include <linux/delay.h>
++#include <linux/interrupt.h>
+ #include <linux/io.h>
+ #include <linux/kernel.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
++#include <linux/of_irq.h>
+ #include <linux/platform_device.h>
+ #include <linux/watchdog.h>
+ 
+-struct aspeed_wdt {
+-	struct watchdog_device	wdd;
+-	void __iomem		*base;
+-	u32			ctrl;
+-};
+-
+ struct aspeed_wdt_config {
+ 	u32 ext_pulse_width_mask;
++	u32 irq_match_mask;
++	u32 irq_match_value;
++	u32 irq_status;
++};
++
++struct aspeed_wdt {
++	struct watchdog_device		wdd;
++	void __iomem			*base;
++	u32				ctrl;
++	const struct aspeed_wdt_config	*config;
+ };
+ 
+ static const struct aspeed_wdt_config ast2400_config = {
+ 	.ext_pulse_width_mask = 0xff,
++	.irq_match_mask = 0,
++	.irq_match_value = 0,
++	.irq_status = BIT(0),
+ };
+ 
+ static const struct aspeed_wdt_config ast2500_config = {
+ 	.ext_pulse_width_mask = 0xfffff,
++	.irq_match_mask = GENMASK(31, 12),
++	.irq_match_value = GENMASK(31, 12),    /* WDT00[31:20] == 0 && WDT00[19:0] == pre-timeout */
++	.irq_status = BIT(2),
++};
++
++static const struct aspeed_wdt_config ast2600_config = {
++	.ext_pulse_width_mask = 0xfffff,
++	.irq_match_mask = GENMASK(31, 10),
++	.irq_match_value = BIT(20),		  /* WDT00[31:10] == pre-timeout && WDT[9:0] == 0 */
++	.irq_status = BIT(2),
+ };
+ 
+ static const struct of_device_id aspeed_wdt_of_table[] = {
+ 	{ .compatible = "aspeed,ast2400-wdt", .data = &ast2400_config },
+ 	{ .compatible = "aspeed,ast2500-wdt", .data = &ast2500_config },
+-	{ .compatible = "aspeed,ast2600-wdt", .data = &ast2500_config },
++	{ .compatible = "aspeed,ast2600-wdt", .data = &ast2600_config },
+ 	{ },
+ };
+ MODULE_DEVICE_TABLE(of, aspeed_wdt_of_table);
+@@ -238,6 +258,23 @@ static const struct watchdog_info aspeed_wdt_info = {
+ 	.identity	= KBUILD_MODNAME,
+ };
+ 
++static irqreturn_t aspeed_wdt_irq(int irq, void *dev_id)
++{
++	struct aspeed_wdt *wdt = dev_id;
++	int sts;
++
++	sts = readl(wdt->base + WDT_TIMEOUT_STATUS);
++	if (sts & wdt->config->irq_status)
++	{
++		WARN_ON("Watchdog pre-timeout IRQ delivered");
++		writel(WDT_CLEAR_TIMEOUT_AND_BOOT_CODE_SELECTION,
++		       wdt->base + WDT_CLEAR_TIMEOUT_STATUS);
++		return IRQ_HANDLED;
++	}
++
++	return IRQ_NONE;
++}
++
+ static int aspeed_wdt_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -309,6 +346,21 @@ static int aspeed_wdt_probe(struct platform_device *pdev)
+ 	if (of_property_read_bool(np, "aspeed,alt-boot"))
+ 		wdt->ctrl |= WDT_CTRL_BOOT_SECONDARY;
+ 
++	if (config->irq_match_mask) {
++		int irq;
++
++		irq = irq_of_parse_and_map(pdev->dev.of_node, 0);
++		ret = devm_request_irq(&pdev->dev, irq, aspeed_wdt_irq, IRQF_SHARED,
++				       dev_name(&pdev->dev), wdt);
++		if (ret) {
++			dev_err(&pdev->dev, "IRQ request failed: %d\n", ret);
++			return ret;
++		}
++
++		wdt->ctrl &= ~config->irq_match_mask;
++		wdt->ctrl |= config->irq_match_value | WDT_CTRL_WDT_INTR;
++	}
++
+ 	if (readl(wdt->base + WDT_CTRL) & WDT_CTRL_ENABLE)  {
+ 		/*
+ 		 * The watchdog is running, but invoke aspeed_wdt_start() to
+@@ -376,6 +428,7 @@ static int aspeed_wdt_probe(struct platform_device *pdev)
+ 			wdt->wdd.groups = bswitch_groups;
+ 	}
+ 
++	wdt->config = config;
+ 	dev_set_drvdata(dev, wdt);
+ 
+ 	return devm_watchdog_register_device(dev, &wdt->wdd);

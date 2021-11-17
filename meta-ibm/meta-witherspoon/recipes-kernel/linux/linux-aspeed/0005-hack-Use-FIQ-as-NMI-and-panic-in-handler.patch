@@ -1,0 +1,113 @@
+From bcb80484be386ef86566a429042d5c2dbb54ab27 Mon Sep 17 00:00:00 2001
+From: Andrew Jeffery <andrew@aj.id.au>
+Date: Thu, 18 Nov 2021 11:19:22 +1030
+Subject: [PATCH] hack: Use FIQ as NMI and panic() in handler
+
+Signed-off-by: Andrew Jeffery <andrew@aj.id.au>
+---
+ arch/arm/kernel/traps.c          |  4 ++++
+ arch/arm/mach-aspeed/Kconfig     |  1 +
+ drivers/irqchip/irq-aspeed-vic.c |  5 +++--
+ drivers/watchdog/aspeed_wdt.c    | 25 +++++++++++++++++++++++++
+ 4 files changed, 33 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm/kernel/traps.c b/arch/arm/kernel/traps.c
+index 97a512551b21..3fa80406b34f 100644
+--- a/arch/arm/kernel/traps.c
++++ b/arch/arm/kernel/traps.c
+@@ -500,6 +500,7 @@ NOKPROBE_SYMBOL(do_undefinstr)
+  * This handler is not appropriate for general purpose use in drivers
+  * platform code and can be overrideen using set_fiq_handler.
+  */
++void aspeed_wdts_irq_ack(void);
+ asmlinkage void __exception_irq_entry handle_fiq_as_nmi(struct pt_regs *regs)
+ {
+ 	struct pt_regs *old_regs = set_irq_regs(regs);
+@@ -507,6 +508,9 @@ asmlinkage void __exception_irq_entry handle_fiq_as_nmi(struct pt_regs *regs)
+ 	nmi_enter();
+ 
+ 	/* nop. FIQ handlers for special arch/arm features can be added here. */
++	aspeed_wdts_irq_ack();
++
++	panic("FIQ NMI");
+ 
+ 	nmi_exit();
+ 
+diff --git a/arch/arm/mach-aspeed/Kconfig b/arch/arm/mach-aspeed/Kconfig
+index 693cbddae3d8..54e4f43b9866 100644
+--- a/arch/arm/mach-aspeed/Kconfig
++++ b/arch/arm/mach-aspeed/Kconfig
+@@ -29,6 +29,7 @@ config MACH_ASPEED_G5
+ 	depends on ARCH_MULTI_V6
+ 	select PINCTRL_ASPEED_G5
+ 	select FTTMR010_TIMER
++	select FIQ
+ 	help
+ 	 Say yes if you intend to run on an Aspeed ast2500 or similar
+ 	 fifth generation Aspeed BMCs.
+diff --git a/drivers/irqchip/irq-aspeed-vic.c b/drivers/irqchip/irq-aspeed-vic.c
+index 6567ed782f82..d0f3ba55e8df 100644
+--- a/drivers/irqchip/irq-aspeed-vic.c
++++ b/drivers/irqchip/irq-aspeed-vic.c
+@@ -36,6 +36,7 @@
+ #define AVIC_FIQ_STATUS		0x08
+ #define AVIC_RAW_STATUS		0x10
+ #define AVIC_INT_SELECT		0x18
++#define   AVIC_INT_SELECT_WDT	BIT(27)
+ #define AVIC_INT_ENABLE		0x20
+ #define AVIC_INT_ENABLE_CLR	0x28
+ #define AVIC_INT_TRIGGER	0x30
+@@ -67,8 +68,8 @@ static void vic_init_hw(struct aspeed_vic *vic)
+ 	writel(0xffffffff, vic->base + AVIC_INT_TRIGGER_CLR);
+ 	writel(0xffffffff, vic->base + AVIC_INT_TRIGGER_CLR + 4);
+ 
+-	/* Set everything to be IRQ */
+-	writel(0, vic->base + AVIC_INT_SELECT);
++	/* Set the watchdog as FIQ, everything else as IRQ */
++	writel(AVIC_INT_SELECT_WDT, vic->base + AVIC_INT_SELECT);
+ 	writel(0, vic->base + AVIC_INT_SELECT + 4);
+ 
+ 	/* Some interrupts have a programable high/low level trigger
+diff --git a/drivers/watchdog/aspeed_wdt.c b/drivers/watchdog/aspeed_wdt.c
+index 41598390fe48..7f94e2d29c07 100644
+--- a/drivers/watchdog/aspeed_wdt.c
++++ b/drivers/watchdog/aspeed_wdt.c
+@@ -116,6 +116,25 @@ MODULE_DEVICE_TABLE(of, aspeed_wdt_of_table);
+ #define WDT_DEFAULT_TIMEOUT	30
+ #define WDT_RATE_1MHZ		1000000
+ 
++static void __iomem *mapping;
++
++static void aspeed_wdt_irq_ack(int index)
++{
++	void __iomem *base = READ_ONCE(mapping);
++	if (base)
++		writel(WDT_CLEAR_TIMEOUT_AND_BOOT_CODE_SELECTION,
++		       base + (index * 0x20) + WDT_CLEAR_TIMEOUT_STATUS);
++	else
++		pr_err("Cannot clear watchdog IRQ state");
++}
++
++void aspeed_wdts_irq_ack(void)
++{
++	aspeed_wdt_irq_ack(0);
++	aspeed_wdt_irq_ack(1);
++	aspeed_wdt_irq_ack(2);
++}
++
+ static struct aspeed_wdt *to_aspeed_wdt(struct watchdog_device *wdd)
+ {
+ 	return container_of(wdd, struct aspeed_wdt, wdd);
+@@ -287,6 +306,12 @@ static int aspeed_wdt_probe(struct platform_device *pdev)
+ 	u32 status;
+ 	int ret;
+ 
++	if (!READ_ONCE(mapping)) {
++		WRITE_ONCE(mapping, arch_memremap_wb(0x1e785000, 4096));
++	}
++
++	pr_info("%s: Hack mapping at 0x%lx\n", __func__, (unsigned long)mapping);
++
+ 	wdt = devm_kzalloc(dev, sizeof(*wdt), GFP_KERNEL);
+ 	if (!wdt)
+ 		return -ENOMEM;

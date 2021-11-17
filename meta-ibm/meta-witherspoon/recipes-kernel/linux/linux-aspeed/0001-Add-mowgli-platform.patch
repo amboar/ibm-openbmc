@@ -1,16 +1,16 @@
-From f324f8431f9a196a28e3f944e49a3b9c52748b19 Mon Sep 17 00:00:00 2001
+From 35839424e43afb60c82a52876ec5d2483b1de8d9 Mon Sep 17 00:00:00 2001
 From: Ben Pai <ben_pai@wistron.com>
 Date: Tue, 26 Jan 2021 11:18:29 +0800
 Subject: [PATCH] Add mowgli platform
 
 ---
  arch/arm/boot/dts/Makefile                  |   1 +
- arch/arm/boot/dts/aspeed-bmc-opp-mowgli.dts | 668 ++++++++++++++++++++++++++++
+ arch/arm/boot/dts/aspeed-bmc-opp-mowgli.dts | 668 ++++++++++++++++++++
  2 files changed, 669 insertions(+)
  create mode 100644 arch/arm/boot/dts/aspeed-bmc-opp-mowgli.dts
 
 diff --git a/arch/arm/boot/dts/Makefile b/arch/arm/boot/dts/Makefile
-index d6dfdf7..535366f 100644
+index d6dfdf73e66b..535366f8d7b4 100644
 --- a/arch/arm/boot/dts/Makefile
 +++ b/arch/arm/boot/dts/Makefile
 @@ -1297,6 +1297,7 @@ dtb-$(CONFIG_ARCH_ASPEED) += \
@@ -23,7 +23,7 @@ index d6dfdf7..535366f 100644
  	aspeed-bmc-opp-swift.dtb \
 diff --git a/arch/arm/boot/dts/aspeed-bmc-opp-mowgli.dts b/arch/arm/boot/dts/aspeed-bmc-opp-mowgli.dts
 new file mode 100644
-index 0000000..f5b9027
+index 000000000000..f5b9027e13e0
 --- /dev/null
 +++ b/arch/arm/boot/dts/aspeed-bmc-opp-mowgli.dts
 @@ -0,0 +1,668 @@
@@ -695,6 +695,3 @@ index 0000000..f5b9027
 +
 +#include "ibm-power9-dual.dtsi"
 +
--- 
-2.7.4
-

@@ -1,4 +1,4 @@
-From 5e8a59a82fa905acdaf641d777d1ae264d511fe0 Mon Sep 17 00:00:00 2001
+From 7ba8dca76f8704344800f8370affb2d683c21ac3 Mon Sep 17 00:00:00 2001
 From: AndyYFWang <Andy_YF_Wang@wistron.com>
 Date: Thu, 26 Nov 2020 17:05:40 +0800
 Subject: [PATCH] Fix psu signal and vout issue
@@ -9,7 +9,7 @@ Subject: [PATCH] Fix psu signal and vout issue
  2 files changed, 8 insertions(+), 7 deletions(-)
 
 diff --git a/drivers/hwmon/pmbus/ibm-cffps.c b/drivers/hwmon/pmbus/ibm-cffps.c
-index 7cf4cc5..844531e 100644
+index 7cf4cc5824ab..844531e002dd 100644
 --- a/drivers/hwmon/pmbus/ibm-cffps.c
 +++ b/drivers/hwmon/pmbus/ibm-cffps.c
 @@ -444,8 +444,7 @@ static struct pmbus_driver_info ibm_cffps_info[] = {
@@ -23,7 +23,7 @@ index 7cf4cc5..844531e 100644
  			PMBUS_HAVE_STATUS_INPUT | PMBUS_HAVE_STATUS_TEMP |
  			PMBUS_HAVE_STATUS_FAN12,
 diff --git a/drivers/hwmon/pmbus/pmbus_core.c b/drivers/hwmon/pmbus/pmbus_core.c
-index f7fc388..e9646c8 100644
+index f7fc388a885b..e9646c8f302d 100644
 --- a/drivers/hwmon/pmbus/pmbus_core.c
 +++ b/drivers/hwmon/pmbus/pmbus_core.c
 @@ -636,8 +636,10 @@ static long pmbus_reg2data_linear(struct pmbus_data *data,
@@ -52,6 +52,3 @@ index f7fc388..e9646c8 100644
  
  	if (data->info->pages)
  		pmbus_clear_faults(client);
--- 
-2.7.4
-
