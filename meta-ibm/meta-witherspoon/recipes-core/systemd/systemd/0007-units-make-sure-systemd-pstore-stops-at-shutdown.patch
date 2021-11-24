@@ -1,0 +1,28 @@
+From 010a46887a54c171796ba121323c90a775076a8a Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Wed, 8 Apr 2020 16:25:03 +0200
+Subject: [PATCH 7/7] units: make sure systemd-pstore stops at shutdown
+
+This doesn't matter too much given that the service doesn't do anything
+on shutdown, but let's still stop it to make things cleaner.
+---
+ units/systemd-pstore.service.in | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/units/systemd-pstore.service.in b/units/systemd-pstore.service.in
+index f9705b57f6f1..6e4827f03c86 100644
+--- a/units/systemd-pstore.service.in
++++ b/units/systemd-pstore.service.in
+@@ -13,7 +13,8 @@ Documentation=man:systemd-pstore(8)
+ ConditionDirectoryNotEmpty=/sys/fs/pstore
+ ConditionVirtualization=!container
+ DefaultDependencies=no
+-Before=sysinit.target
++Conflicts=shutdown.target
++Before=sysinit.target shutdown.target
+ 
+ [Service]
+ Type=oneshot
+-- 
+2.32.0
+

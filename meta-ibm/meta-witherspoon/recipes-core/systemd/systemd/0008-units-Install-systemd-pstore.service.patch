@@ -1,0 +1,27 @@
+From beb850f8609a13a4cd8efc3d568ccf0fca466650 Mon Sep 17 00:00:00 2001
+From: Andrew Jeffery <andrew@aj.id.au>
+Date: Thu, 25 Nov 2021 09:57:28 +1030
+Subject: [PATCH] units: Install systemd-pstore.service
+
+Signed-off-by: Andrew Jeffery <andrew@aj.id.au>
+---
+ units/meson.build | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/units/meson.build b/units/meson.build
+index 1f9ccf6c9aa6..dd804d2c903e 100644
+--- a/units/meson.build
++++ b/units/meson.build
+@@ -139,7 +139,8 @@ in_units = [
+         ['systemd-bless-boot.service',           'ENABLE_EFI HAVE_BLKID'],
+         ['systemd-boot-check-no-failures.service', ''],
+         ['systemd-coredump@.service',            'ENABLE_COREDUMP'],
+-        ['systemd-pstore.service',               'ENABLE_PSTORE'],
++        ['systemd-pstore.service',               'ENABLE_PSTORE',
++         'sysinit.target.wants/'],
+         ['systemd-firstboot.service',            'ENABLE_FIRSTBOOT',
+          'sysinit.target.wants/'],
+         ['systemd-fsck-root.service',            ''],
+-- 
+2.32.0
+

@@ -1,0 +1,789 @@
+From ae4ae4ff600cd8f87566035f551ab2454ed098fb Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Wed, 13 Mar 2019 12:14:47 +0100
+Subject: [PATCH 1/7] util: split out sorting related calls to new
+ sort-util.[ch]
+
+---
+ src/analyze/analyze.c                        |  3 +-
+ src/basic/conf-files.c                       |  2 +-
+ src/basic/meson.build                        |  2 +
+ src/basic/sort-util.c                        | 27 ++++++++
+ src/basic/sort-util.h                        | 70 ++++++++++++++++++++
+ src/basic/strbuf.c                           |  2 +-
+ src/basic/strv.c                             |  2 +-
+ src/basic/util.c                             | 25 -------
+ src/basic/util.h                             | 64 ------------------
+ src/busctl/busctl.c                          |  2 +-
+ src/cgtop/cgtop.c                            |  2 +-
+ src/core/job.c                               |  1 +
+ src/core/namespace.c                         |  2 +-
+ src/journal/catalog.c                        |  1 +
+ src/journal/journal-file.c                   |  1 +
+ src/journal/journal-vacuum.c                 |  2 +-
+ src/libsystemd-network/sd-lldp.c             |  1 +
+ src/libsystemd/sd-bus/bus-match.c            |  1 +
+ src/libsystemd/sd-device/device-enumerator.c |  2 +-
+ src/libsystemd/sd-hwdb/hwdb-util.c           |  1 +
+ src/libsystemd/sd-netlink/local-addresses.c  |  1 +
+ src/machine/machinectl.c                     |  2 +-
+ src/mount/mount-tool.c                       |  3 +-
+ src/network/networkctl.c                     |  2 +-
+ src/nspawn/nspawn-mount.c                    |  2 +-
+ src/portable/portable.c                      |  1 +
+ src/resolve/resolved-dns-dnssec.c            |  1 +
+ src/resolve/resolved-dns-trust-anchor.c      |  3 +-
+ src/resolve/resolved-mdns.c                  |  1 +
+ src/shared/bootspec.c                        |  1 +
+ src/shared/bus-unit-util.c                   |  2 +-
+ src/shared/calendarspec.c                    |  1 +
+ src/shared/cgroup-show.c                     |  1 +
+ src/shared/efivars.c                         |  2 +-
+ src/shared/format-table.c                    |  1 +
+ src/shared/uid-range.c                       |  2 +-
+ src/systemctl/systemctl.c                    |  1 +
+ src/test/test-prioq.c                        |  2 +-
+ src/tmpfiles/tmpfiles.c                      |  2 +-
+ 39 files changed, 136 insertions(+), 108 deletions(-)
+ create mode 100644 src/basic/sort-util.c
+ create mode 100644 src/basic/sort-util.h
+
+diff --git a/src/analyze/analyze.c b/src/analyze/analyze.c
+index 3915b66739e0..fabdc316495c 100644
+--- a/src/analyze/analyze.c
++++ b/src/analyze/analyze.c
+@@ -36,11 +36,12 @@
+ #if HAVE_SECCOMP
+ #  include "seccomp-util.h"
+ #endif
++#include "sort-util.h"
+ #include "special.h"
+ #include "strv.h"
+ #include "strxcpyx.h"
+-#include "time-util.h"
+ #include "terminal-util.h"
++#include "time-util.h"
+ #include "unit-name.h"
+ #include "util.h"
+ #include "verbs.h"
+diff --git a/src/basic/conf-files.c b/src/basic/conf-files.c
+index b70c6e50a8c7..d010fbb2668f 100644
+--- a/src/basic/conf-files.c
++++ b/src/basic/conf-files.c
+@@ -17,11 +17,11 @@
+ #include "missing.h"
+ #include "path-util.h"
+ #include "set.h"
++#include "sort-util.h"
+ #include "stat-util.h"
+ #include "string-util.h"
+ #include "strv.h"
+ #include "terminal-util.h"
+-#include "util.h"
+ 
+ static int files_add(
+                 Hashmap *h,
+diff --git a/src/basic/meson.build b/src/basic/meson.build
+index e5852f32f9ae..a1e2cfdf4e5f 100644
+--- a/src/basic/meson.build
++++ b/src/basic/meson.build
+@@ -169,6 +169,8 @@ basic_sources = files('''
+         socket-label.c
+         socket-util.c
+         socket-util.h
++        sort-util.c
++        sort-util.h
+         sparse-endian.h
+         special.h
+         stat-util.c
+diff --git a/src/basic/sort-util.c b/src/basic/sort-util.c
+new file mode 100644
+index 000000000000..5cf0d1d49b6c
+--- /dev/null
++++ b/src/basic/sort-util.c
+@@ -0,0 +1,27 @@
++#include "sort-util.h"
++#include "alloc-util.h"
++
++/* hey glibc, APIs with callbacks without a user pointer are so useless */
++void *xbsearch_r(const void *key, const void *base, size_t nmemb, size_t size,
++                 __compar_d_fn_t compar, void *arg) {
++        size_t l, u, idx;
++        const void *p;
++        int comparison;
++
++        assert(!size_multiply_overflow(nmemb, size));
++
++        l = 0;
++        u = nmemb;
++        while (l < u) {
++                idx = (l + u) / 2;
++                p = (const uint8_t*) base + idx * size;
++                comparison = compar(key, p, arg);
++                if (comparison < 0)
++                        u = idx;
++                else if (comparison > 0)
++                        l = idx + 1;
++                else
++                        return (void *)p;
++        }
++        return NULL;
++}
+diff --git a/src/basic/sort-util.h b/src/basic/sort-util.h
+new file mode 100644
+index 000000000000..e029f8646eb0
+--- /dev/null
++++ b/src/basic/sort-util.h
+@@ -0,0 +1,70 @@
++/* SPDX-License-Identifier: LGPL-2.1+ */
++#pragma once
++
++#include <stdlib.h>
++
++#include "macro.h"
++
++void *xbsearch_r(const void *key, const void *base, size_t nmemb, size_t size,
++                 __compar_d_fn_t compar, void *arg);
++
++#define typesafe_bsearch_r(k, b, n, func, userdata)                     \
++        ({                                                              \
++                const typeof(b[0]) *_k = k;                             \
++                int (*_func_)(const typeof(b[0])*, const typeof(b[0])*, typeof(userdata)) = func; \
++                xbsearch_r((const void*) _k, (b), (n), sizeof((b)[0]), (__compar_d_fn_t) _func_, userdata); \
++        })
++
++/**
++ * Normal bsearch requires base to be nonnull. Here were require
++ * that only if nmemb > 0.
++ */
++static inline void* bsearch_safe(const void *key, const void *base,
++                                 size_t nmemb, size_t size, __compar_fn_t compar) {
++        if (nmemb <= 0)
++                return NULL;
++
++        assert(base);
++        return bsearch(key, base, nmemb, size, compar);
++}
++
++#define typesafe_bsearch(k, b, n, func)                                 \
++        ({                                                              \
++                const typeof(b[0]) *_k = k;                             \
++                int (*_func_)(const typeof(b[0])*, const typeof(b[0])*) = func; \
++                bsearch_safe((const void*) _k, (b), (n), sizeof((b)[0]), (__compar_fn_t) _func_); \
++        })
++
++/**
++ * Normal qsort requires base to be nonnull. Here were require
++ * that only if nmemb > 0.
++ */
++static inline void qsort_safe(void *base, size_t nmemb, size_t size, __compar_fn_t compar) {
++        if (nmemb <= 1)
++                return;
++
++        assert(base);
++        qsort(base, nmemb, size, compar);
++}
++
++/* A wrapper around the above, but that adds typesafety: the element size is automatically derived from the type and so
++ * is the prototype for the comparison function */
++#define typesafe_qsort(p, n, func)                                      \
++        ({                                                              \
++                int (*_func_)(const typeof(p[0])*, const typeof(p[0])*) = func; \
++                qsort_safe((p), (n), sizeof((p)[0]), (__compar_fn_t) _func_); \
++        })
++
++static inline void qsort_r_safe(void *base, size_t nmemb, size_t size, __compar_d_fn_t compar, void *userdata) {
++        if (nmemb <= 1)
++                return;
++
++        assert(base);
++        qsort_r(base, nmemb, size, compar, userdata);
++}
++
++#define typesafe_qsort_r(p, n, func, userdata)                          \
++        ({                                                              \
++                int (*_func_)(const typeof(p[0])*, const typeof(p[0])*, typeof(userdata)) = func; \
++                qsort_r_safe((p), (n), sizeof((p)[0]), (__compar_d_fn_t) _func_, userdata); \
++        })
+diff --git a/src/basic/strbuf.c b/src/basic/strbuf.c
+index 81f4f21ade34..769b22aba0ca 100644
+--- a/src/basic/strbuf.c
++++ b/src/basic/strbuf.c
+@@ -5,8 +5,8 @@
+ #include <string.h>
+ 
+ #include "alloc-util.h"
++#include "sort-util.h"
+ #include "strbuf.h"
+-#include "util.h"
+ 
+ /*
+  * Strbuf stores given strings in a single continuous allocated memory
+diff --git a/src/basic/strv.c b/src/basic/strv.c
+index 3a62f25ded57..3700ce5b30b5 100644
+--- a/src/basic/strv.c
++++ b/src/basic/strv.c
+@@ -11,9 +11,9 @@
+ #include "escape.h"
+ #include "extract-word.h"
+ #include "fileio.h"
++#include "sort-util.h"
+ #include "string-util.h"
+ #include "strv.h"
+-#include "util.h"
+ 
+ char *strv_find(char **l, const char *name) {
+         char **i;
+diff --git a/src/basic/util.c b/src/basic/util.c
+index e577c93e60d6..95741469bebe 100644
+--- a/src/basic/util.c
++++ b/src/basic/util.c
+@@ -141,31 +141,6 @@ void in_initrd_force(bool value) {
+         saved_in_initrd = value;
+ }
+ 
+-/* hey glibc, APIs with callbacks without a user pointer are so useless */
+-void *xbsearch_r(const void *key, const void *base, size_t nmemb, size_t size,
+-                 __compar_d_fn_t compar, void *arg) {
+-        size_t l, u, idx;
+-        const void *p;
+-        int comparison;
+-
+-        assert(!size_multiply_overflow(nmemb, size));
+-
+-        l = 0;
+-        u = nmemb;
+-        while (l < u) {
+-                idx = (l + u) / 2;
+-                p = (const uint8_t*) base + idx * size;
+-                comparison = compar(key, p, arg);
+-                if (comparison < 0)
+-                        u = idx;
+-                else if (comparison > 0)
+-                        l = idx + 1;
+-                else
+-                        return (void *)p;
+-        }
+-        return NULL;
+-}
+-
+ bool memeqzero(const void *data, size_t length) {
+         /* Does the buffer consist entirely of NULs?
+          * Copied from https://github.com/systemd/casync/, copied in turn from
+diff --git a/src/basic/util.h b/src/basic/util.h
+index dc33d660674a..ec676d99d8dd 100644
+--- a/src/basic/util.h
++++ b/src/basic/util.h
+@@ -66,70 +66,6 @@ int prot_from_flags(int flags) _const_;
+ bool in_initrd(void);
+ void in_initrd_force(bool value);
+ 
+-void *xbsearch_r(const void *key, const void *base, size_t nmemb, size_t size,
+-                 __compar_d_fn_t compar, void *arg);
+-
+-#define typesafe_bsearch_r(k, b, n, func, userdata)                     \
+-        ({                                                              \
+-                const typeof(b[0]) *_k = k;                             \
+-                int (*_func_)(const typeof(b[0])*, const typeof(b[0])*, typeof(userdata)) = func; \
+-                xbsearch_r((const void*) _k, (b), (n), sizeof((b)[0]), (__compar_d_fn_t) _func_, userdata); \
+-        })
+-
+-/**
+- * Normal bsearch requires base to be nonnull. Here were require
+- * that only if nmemb > 0.
+- */
+-static inline void* bsearch_safe(const void *key, const void *base,
+-                                 size_t nmemb, size_t size, __compar_fn_t compar) {
+-        if (nmemb <= 0)
+-                return NULL;
+-
+-        assert(base);
+-        return bsearch(key, base, nmemb, size, compar);
+-}
+-
+-#define typesafe_bsearch(k, b, n, func)                                 \
+-        ({                                                              \
+-                const typeof(b[0]) *_k = k;                             \
+-                int (*_func_)(const typeof(b[0])*, const typeof(b[0])*) = func; \
+-                bsearch_safe((const void*) _k, (b), (n), sizeof((b)[0]), (__compar_fn_t) _func_); \
+-        })
+-
+-/**
+- * Normal qsort requires base to be nonnull. Here were require
+- * that only if nmemb > 0.
+- */
+-static inline void qsort_safe(void *base, size_t nmemb, size_t size, __compar_fn_t compar) {
+-        if (nmemb <= 1)
+-                return;
+-
+-        assert(base);
+-        qsort(base, nmemb, size, compar);
+-}
+-
+-/* A wrapper around the above, but that adds typesafety: the element size is automatically derived from the type and so
+- * is the prototype for the comparison function */
+-#define typesafe_qsort(p, n, func)                                      \
+-        ({                                                              \
+-                int (*_func_)(const typeof(p[0])*, const typeof(p[0])*) = func; \
+-                qsort_safe((p), (n), sizeof((p)[0]), (__compar_fn_t) _func_); \
+-        })
+-
+-static inline void qsort_r_safe(void *base, size_t nmemb, size_t size, __compar_d_fn_t compar, void *userdata) {
+-        if (nmemb <= 1)
+-                return;
+-
+-        assert(base);
+-        qsort_r(base, nmemb, size, compar, userdata);
+-}
+-
+-#define typesafe_qsort_r(p, n, func, userdata)                          \
+-        ({                                                              \
+-                int (*_func_)(const typeof(p[0])*, const typeof(p[0])*, typeof(userdata)) = func; \
+-                qsort_r_safe((p), (n), sizeof((p)[0]), (__compar_d_fn_t) _func_, userdata); \
+-        })
+-
+ /* Normal memcpy requires src to be nonnull. We do nothing if n is 0. */
+ static inline void memcpy_safe(void *dst, const void *src, size_t n) {
+         if (n == 0)
+diff --git a/src/busctl/busctl.c b/src/busctl/busctl.c
+index 08d9e70c9608..f3abf564cb4f 100644
+--- a/src/busctl/busctl.c
++++ b/src/busctl/busctl.c
+@@ -25,10 +25,10 @@
+ #include "path-util.h"
+ #include "pretty-print.h"
+ #include "set.h"
++#include "sort-util.h"
+ #include "strv.h"
+ #include "terminal-util.h"
+ #include "user-util.h"
+-#include "util.h"
+ #include "verbs.h"
+ 
+ static enum {
+diff --git a/src/cgtop/cgtop.c b/src/cgtop/cgtop.c
+index b3bda30cec04..519bb024c361 100644
+--- a/src/cgtop/cgtop.c
++++ b/src/cgtop/cgtop.c
+@@ -25,11 +25,11 @@
+ #include "pretty-print.h"
+ #include "process-util.h"
+ #include "procfs-util.h"
++#include "sort-util.h"
+ #include "stdio-util.h"
+ #include "strv.h"
+ #include "terminal-util.h"
+ #include "unit-name.h"
+-#include "util.h"
+ #include "virt.h"
+ 
+ typedef struct Group {
+diff --git a/src/core/job.c b/src/core/job.c
+index 59bb9d2162c6..e9faa5ec8786 100644
+--- a/src/core/job.c
++++ b/src/core/job.c
+@@ -17,6 +17,7 @@
+ #include "parse-util.h"
+ #include "serialize.h"
+ #include "set.h"
++#include "sort-util.h"
+ #include "special.h"
+ #include "stdio-util.h"
+ #include "string-table.h"
+diff --git a/src/core/namespace.c b/src/core/namespace.c
+index 7f553a42c2b5..8a930aafcebb 100644
+--- a/src/core/namespace.c
++++ b/src/core/namespace.c
+@@ -25,13 +25,13 @@
+ #include "path-util.h"
+ #include "selinux-util.h"
+ #include "socket-util.h"
++#include "sort-util.h"
+ #include "stat-util.h"
+ #include "string-table.h"
+ #include "string-util.h"
+ #include "strv.h"
+ #include "umask-util.h"
+ #include "user-util.h"
+-#include "util.h"
+ 
+ #define DEV_MOUNT_OPTIONS (MS_NOSUID|MS_STRICTATIME|MS_NOEXEC)
+ 
+diff --git a/src/journal/catalog.c b/src/journal/catalog.c
+index 4062f12c2dfc..fd76d978b10f 100644
+--- a/src/journal/catalog.c
++++ b/src/journal/catalog.c
+@@ -20,6 +20,7 @@
+ #include "mkdir.h"
+ #include "path-util.h"
+ #include "siphash24.h"
++#include "sort-util.h"
+ #include "sparse-endian.h"
+ #include "strbuf.h"
+ #include "string-util.h"
+diff --git a/src/journal/journal-file.c b/src/journal/journal-file.c
+index 56827f9f3698..3a643b0e380e 100644
+--- a/src/journal/journal-file.c
++++ b/src/journal/journal-file.c
+@@ -26,6 +26,7 @@
+ #include "path-util.h"
+ #include "random-util.h"
+ #include "set.h"
++#include "sort-util.h"
+ #include "stat-util.h"
+ #include "string-util.h"
+ #include "strv.h"
+diff --git a/src/journal/journal-vacuum.c b/src/journal/journal-vacuum.c
+index 2778ce40c58d..a932314e19e6 100644
+--- a/src/journal/journal-vacuum.c
++++ b/src/journal/journal-vacuum.c
+@@ -14,9 +14,9 @@
+ #include "journal-file.h"
+ #include "journal-vacuum.h"
+ #include "parse-util.h"
++#include "sort-util.h"
+ #include "string-util.h"
+ #include "time-util.h"
+-#include "util.h"
+ #include "xattr-util.h"
+ 
+ struct vacuum_info {
+diff --git a/src/libsystemd-network/sd-lldp.c b/src/libsystemd-network/sd-lldp.c
+index 969fc71051bc..7874df19780f 100644
+--- a/src/libsystemd-network/sd-lldp.c
++++ b/src/libsystemd-network/sd-lldp.c
+@@ -14,6 +14,7 @@
+ #include "lldp-neighbor.h"
+ #include "lldp-network.h"
+ #include "socket-util.h"
++#include "sort-util.h"
+ #include "string-table.h"
+ 
+ #define LLDP_DEFAULT_NEIGHBORS_MAX 128U
+diff --git a/src/libsystemd/sd-bus/bus-match.c b/src/libsystemd/sd-bus/bus-match.c
+index 9642de10c3e6..266dd7f1df92 100644
+--- a/src/libsystemd/sd-bus/bus-match.c
++++ b/src/libsystemd/sd-bus/bus-match.c
+@@ -10,6 +10,7 @@
+ #include "fd-util.h"
+ #include "fileio.h"
+ #include "hexdecoct.h"
++#include "sort-util.h"
+ #include "string-util.h"
+ #include "strv.h"
+ 
+diff --git a/src/libsystemd/sd-device/device-enumerator.c b/src/libsystemd/sd-device/device-enumerator.c
+index 20529aafd366..78c7c2f7ef5c 100644
+--- a/src/libsystemd/sd-device/device-enumerator.c
++++ b/src/libsystemd/sd-device/device-enumerator.c
+@@ -8,9 +8,9 @@
+ #include "dirent-util.h"
+ #include "fd-util.h"
+ #include "set.h"
++#include "sort-util.h"
+ #include "string-util.h"
+ #include "strv.h"
+-#include "util.h"
+ 
+ #define DEVICE_ENUMERATE_MAX_DEPTH 256
+ 
+diff --git a/src/libsystemd/sd-hwdb/hwdb-util.c b/src/libsystemd/sd-hwdb/hwdb-util.c
+index f8529670b35f..dd9bf9e18d6a 100644
+--- a/src/libsystemd/sd-hwdb/hwdb-util.c
++++ b/src/libsystemd/sd-hwdb/hwdb-util.c
+@@ -13,6 +13,7 @@
+ #include "label.h"
+ #include "mkdir.h"
+ #include "path-util.h"
++#include "sort-util.h"
+ #include "strbuf.h"
+ #include "string-util.h"
+ #include "strv.h"
+diff --git a/src/libsystemd/sd-netlink/local-addresses.c b/src/libsystemd/sd-netlink/local-addresses.c
+index 5c37279bd20a..751144539bcc 100644
+--- a/src/libsystemd/sd-netlink/local-addresses.c
++++ b/src/libsystemd/sd-netlink/local-addresses.c
+@@ -6,6 +6,7 @@
+ #include "local-addresses.h"
+ #include "macro.h"
+ #include "netlink-util.h"
++#include "sort-util.h"
+ 
+ static int address_compare(const struct local_address *a, const struct local_address *b) {
+         int r;
+diff --git a/src/machine/machinectl.c b/src/machine/machinectl.c
+index 30f2e26a1e8c..6a98d89d54e2 100644
+--- a/src/machine/machinectl.c
++++ b/src/machine/machinectl.c
+@@ -44,13 +44,13 @@
+ #include "rlimit-util.h"
+ #include "sigbus.h"
+ #include "signal-util.h"
++#include "sort-util.h"
+ #include "spawn-polkit-agent.h"
+ #include "stdio-util.h"
+ #include "string-table.h"
+ #include "strv.h"
+ #include "terminal-util.h"
+ #include "unit-name.h"
+-#include "util.h"
+ #include "verbs.h"
+ #include "web-util.h"
+ 
+diff --git a/src/mount/mount-tool.c b/src/mount/mount-tool.c
+index bbbc91c38e3e..1fc8c954d9d2 100644
+--- a/src/mount/mount-tool.c
++++ b/src/mount/mount-tool.c
+@@ -22,13 +22,14 @@
+ #include "parse-util.h"
+ #include "path-util.h"
+ #include "pretty-print.h"
++#include "sort-util.h"
+ #include "spawn-polkit-agent.h"
+ #include "stat-util.h"
+ #include "strv.h"
++#include "terminal-util.h"
+ #include "unit-def.h"
+ #include "unit-name.h"
+ #include "user-util.h"
+-#include "terminal-util.h"
+ 
+ enum {
+         ACTION_DEFAULT,
+diff --git a/src/network/networkctl.c b/src/network/networkctl.c
+index b14b81cc85a5..3783155991d8 100644
+--- a/src/network/networkctl.c
++++ b/src/network/networkctl.c
+@@ -26,6 +26,7 @@
+ #include "parse-util.h"
+ #include "pretty-print.h"
+ #include "socket-util.h"
++#include "sort-util.h"
+ #include "sparse-endian.h"
+ #include "stdio-util.h"
+ #include "string-table.h"
+@@ -33,7 +34,6 @@
+ #include "strv.h"
+ #include "strxcpyx.h"
+ #include "terminal-util.h"
+-#include "util.h"
+ #include "verbs.h"
+ 
+ static PagerFlags arg_pager_flags = 0;
+diff --git a/src/nspawn/nspawn-mount.c b/src/nspawn/nspawn-mount.c
+index a9af889747b8..be103a4914a2 100644
+--- a/src/nspawn/nspawn-mount.c
++++ b/src/nspawn/nspawn-mount.c
+@@ -16,12 +16,12 @@
+ #include "path-util.h"
+ #include "rm-rf.h"
+ #include "set.h"
++#include "sort-util.h"
+ #include "stat-util.h"
+ #include "string-util.h"
+ #include "strv.h"
+ #include "tmpfile-util.h"
+ #include "user-util.h"
+-#include "util.h"
+ 
+ CustomMount* custom_mount_add(CustomMount **l, size_t *n, CustomMountType t) {
+         CustomMount *c, *ret;
+diff --git a/src/portable/portable.c b/src/portable/portable.c
+index 01fd1a94a0cd..9d0d21c11533 100644
+--- a/src/portable/portable.c
++++ b/src/portable/portable.c
+@@ -24,6 +24,7 @@
+ #include "set.h"
+ #include "signal-util.h"
+ #include "socket-util.h"
++#include "sort-util.h"
+ #include "string-table.h"
+ #include "strv.h"
+ #include "tmpfile-util.h"
+diff --git a/src/resolve/resolved-dns-dnssec.c b/src/resolve/resolved-dns-dnssec.c
+index 14acc4e77db5..b5676aaee653 100644
+--- a/src/resolve/resolved-dns-dnssec.c
++++ b/src/resolve/resolved-dns-dnssec.c
+@@ -14,6 +14,7 @@
+ #include "hexdecoct.h"
+ #include "resolved-dns-dnssec.h"
+ #include "resolved-dns-packet.h"
++#include "sort-util.h"
+ #include "string-table.h"
+ 
+ #define VERIFY_RRS_MAX 256
+diff --git a/src/resolve/resolved-dns-trust-anchor.c b/src/resolve/resolved-dns-trust-anchor.c
+index c5ec93b72448..e5a27ca68815 100644
+--- a/src/resolve/resolved-dns-trust-anchor.c
++++ b/src/resolve/resolved-dns-trust-anchor.c
+@@ -10,9 +10,10 @@
+ #include "fileio.h"
+ #include "hexdecoct.h"
+ #include "parse-util.h"
+-#include "resolved-dns-trust-anchor.h"
+ #include "resolved-dns-dnssec.h"
++#include "resolved-dns-trust-anchor.h"
+ #include "set.h"
++#include "sort-util.h"
+ #include "string-util.h"
+ #include "strv.h"
+ 
+diff --git a/src/resolve/resolved-mdns.c b/src/resolve/resolved-mdns.c
+index 89c2497d3270..67080cb01c40 100644
+--- a/src/resolve/resolved-mdns.c
++++ b/src/resolve/resolved-mdns.c
+@@ -8,6 +8,7 @@
+ #include "fd-util.h"
+ #include "resolved-manager.h"
+ #include "resolved-mdns.h"
++#include "sort-util.h"
+ 
+ #define CLEAR_CACHE_FLUSH(x) (~MDNS_RR_CACHE_FLUSH & (x))
+ 
+diff --git a/src/shared/bootspec.c b/src/shared/bootspec.c
+index 7e276f1edf58..0594537b3ec6 100644
+--- a/src/shared/bootspec.c
++++ b/src/shared/bootspec.c
+@@ -17,6 +17,7 @@
+ #include "fileio.h"
+ #include "parse-util.h"
+ #include "path-util.h"
++#include "sort-util.h"
+ #include "stat-util.h"
+ #include "string-util.h"
+ #include "strv.h"
+diff --git a/src/shared/bus-unit-util.c b/src/shared/bus-unit-util.c
+index 9a8051d0635a..81018a53f323 100644
+--- a/src/shared/bus-unit-util.c
++++ b/src/shared/bus-unit-util.c
+@@ -27,13 +27,13 @@
+ #include "rlimit-util.h"
+ #include "securebits-util.h"
+ #include "signal-util.h"
++#include "sort-util.h"
+ #include "string-util.h"
+ #include "syslog-util.h"
+ #include "terminal-util.h"
+ #include "unit-def.h"
+ #include "user-util.h"
+ #include "utf8.h"
+-#include "util.h"
+ 
+ int bus_parse_unit_info(sd_bus_message *message, UnitInfo *u) {
+         assert(message);
+diff --git a/src/shared/calendarspec.c b/src/shared/calendarspec.c
+index dafc09e8f849..745b726cda02 100644
+--- a/src/shared/calendarspec.c
++++ b/src/shared/calendarspec.c
+@@ -18,6 +18,7 @@
+ #include "macro.h"
+ #include "parse-util.h"
+ #include "process-util.h"
++#include "sort-util.h"
+ #include "string-util.h"
+ #include "time-util.h"
+ 
+diff --git a/src/shared/cgroup-show.c b/src/shared/cgroup-show.c
+index 61df7511a178..91a243944c78 100644
+--- a/src/shared/cgroup-show.c
++++ b/src/shared/cgroup-show.c
+@@ -20,6 +20,7 @@
+ #include "output-mode.h"
+ #include "path-util.h"
+ #include "process-util.h"
++#include "sort-util.h"
+ #include "string-util.h"
+ #include "terminal-util.h"
+ #include "unit-name.h"
+diff --git a/src/shared/efivars.c b/src/shared/efivars.c
+index 26f905bfaa6c..c543dbf2e656 100644
+--- a/src/shared/efivars.c
++++ b/src/shared/efivars.c
+@@ -21,11 +21,11 @@
+ #include "io-util.h"
+ #include "macro.h"
+ #include "parse-util.h"
++#include "sort-util.h"
+ #include "stdio-util.h"
+ #include "strv.h"
+ #include "time-util.h"
+ #include "utf8.h"
+-#include "util.h"
+ #include "virt.h"
+ 
+ #if ENABLE_EFI
+diff --git a/src/shared/format-table.c b/src/shared/format-table.c
+index 7d529801a1da..970edd0ff32c 100644
+--- a/src/shared/format-table.c
++++ b/src/shared/format-table.c
+@@ -11,6 +11,7 @@
+ #include "pager.h"
+ #include "parse-util.h"
+ #include "pretty-print.h"
++#include "sort-util.h"
+ #include "string-util.h"
+ #include "terminal-util.h"
+ #include "time-util.h"
+diff --git a/src/shared/uid-range.c b/src/shared/uid-range.c
+index 5fa7bd277eb7..7cb7d8a477e9 100644
+--- a/src/shared/uid-range.c
++++ b/src/shared/uid-range.c
+@@ -6,9 +6,9 @@
+ 
+ #include "alloc-util.h"
+ #include "macro.h"
++#include "sort-util.h"
+ #include "uid-range.h"
+ #include "user-util.h"
+-#include "util.h"
+ 
+ static bool uid_range_intersect(UidRange *range, uid_t start, uid_t nr) {
+         assert(range);
+diff --git a/src/systemctl/systemctl.c b/src/systemctl/systemctl.c
+index 63dae2c87285..ab63020a7f7c 100644
+--- a/src/systemctl/systemctl.c
++++ b/src/systemctl/systemctl.c
+@@ -62,6 +62,7 @@
+ #include "sigbus.h"
+ #include "signal-util.h"
+ #include "socket-util.h"
++#include "sort-util.h"
+ #include "spawn-ask-password-agent.h"
+ #include "spawn-polkit-agent.h"
+ #include "special.h"
+diff --git a/src/test/test-prioq.c b/src/test/test-prioq.c
+index 53c9e090a702..21d5b44fbb69 100644
+--- a/src/test/test-prioq.c
++++ b/src/test/test-prioq.c
+@@ -6,7 +6,7 @@
+ #include "prioq.h"
+ #include "set.h"
+ #include "siphash24.h"
+-#include "util.h"
++#include "sort-util.h"
+ 
+ #define SET_SIZE 1024*4
+ 
+diff --git a/src/tmpfiles/tmpfiles.c b/src/tmpfiles/tmpfiles.c
+index b66765b407ee..3dc7ea9f84b0 100644
+--- a/src/tmpfiles/tmpfiles.c
++++ b/src/tmpfiles/tmpfiles.c
+@@ -51,6 +51,7 @@
+ #include "rm-rf.h"
+ #include "selinux-util.h"
+ #include "set.h"
++#include "sort-util.h"
+ #include "specifier.h"
+ #include "stat-util.h"
+ #include "stdio-util.h"
+@@ -59,7 +60,6 @@
+ #include "strv.h"
+ #include "umask-util.h"
+ #include "user-util.h"
+-#include "util.h"
+ 
+ /* This reads all files listed in /etc/tmpfiles.d/?*.conf and creates
+  * them in the file system. This is intended to be used to create
+-- 
+2.32.0
+

@@ -1,0 +1,35 @@
+From 1af1a364643c8b2986b60efcd7c9381702934e62 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Wed, 8 Apr 2020 16:12:00 +0200
+Subject: [PATCH 5/7] units: pull in systemd-pstore.service from sysinit.target
+
+sysinit.target is the target our early boot services are generally
+pulled in from, make systemd-pstore.service not an exception of that.
+
+Effectively this doesn't mean much, either way our unit is part of the
+initial transaction.
+---
+ units/systemd-pstore.service.in | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/units/systemd-pstore.service.in b/units/systemd-pstore.service.in
+index 89f34afe3411..37fcf878f0f0 100644
+--- a/units/systemd-pstore.service.in
++++ b/units/systemd-pstore.service.in
+@@ -15,6 +15,7 @@ ConditionVirtualization=!container
+ DefaultDependencies=no
+ Wants=systemd-remount-fs.service
+ After=systemd-remount-fs.service
++Before=sysinit.target
+ 
+ [Service]
+ Type=oneshot
+@@ -23,4 +24,4 @@ RemainAfterExit=yes
+ StateDirectory=systemd/pstore
+ 
+ [Install]
+-WantedBy=systemd-remount-fs.service
++WantedBy=sysinit.target
+-- 
+2.32.0
+

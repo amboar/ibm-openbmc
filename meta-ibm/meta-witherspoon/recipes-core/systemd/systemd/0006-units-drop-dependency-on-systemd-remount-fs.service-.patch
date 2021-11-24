@@ -1,0 +1,31 @@
+From fba9d37ed4b74554f41f37c46267414eb6b93233 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Wed, 8 Apr 2020 16:10:38 +0200
+Subject: [PATCH 6/7] units: drop dependency on systemd-remount-fs.service from
+ systemd-pstore.service
+
+This dependency is now generated automatically given we use
+StateDirectory=. Moreover the combination of Wants= and After= was too
+strong anway, as whether remount-fs is pulled in or not should not be up
+to systemd-pstore.service, and in fact is part of the initial
+transaction anyway.
+---
+ units/systemd-pstore.service.in | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/units/systemd-pstore.service.in b/units/systemd-pstore.service.in
+index 37fcf878f0f0..f9705b57f6f1 100644
+--- a/units/systemd-pstore.service.in
++++ b/units/systemd-pstore.service.in
+@@ -13,8 +13,6 @@ Documentation=man:systemd-pstore(8)
+ ConditionDirectoryNotEmpty=/sys/fs/pstore
+ ConditionVirtualization=!container
+ DefaultDependencies=no
+-Wants=systemd-remount-fs.service
+-After=systemd-remount-fs.service
+ Before=sysinit.target
+ 
+ [Service]
+-- 
+2.32.0
+
